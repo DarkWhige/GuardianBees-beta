@@ -1,69 +1,95 @@
 import os
 import socket
-from collections import defaultdict
-from datetime import datetime
+import time
 
-from scapy.all import IP, TCP, UDP, sniff
-
-hostname_cache = {}
+from scapy.all import DNS, IP, TCP, UDP, get_if_addr, get_if_list, sniff
 
 
-def display_name(ip_address):
-    if ip_address not in hostname_cache:
-        try:
-            hostname_cache[ip_address] = socket.gethostbyaddr(ip_address)[0]
-        except (socket.herror, socket.gaierror, TimeoutError):
-            hostname_cache[ip_address] = ip_address
-
-    return hostname_cache[ip_address]
-
-
-def packet_callback(packet, requests):
-    if IP in packet:
-        src_ip = packet[IP].src
-        dst_ip = packet[IP].dst
-        if TCP in packet:
-            request_type = "TCP"
-            port = packet[TCP].dport
-        elif UDP in packet:
-            request_type = "UDP"
-            port = packet[UDP].dport
-        else:
-            request_type = f"IP/{packet[IP].proto}"
-            port = "-"
-
-        requests[(request_type, src_ip, dst_ip, port)] += 1
-
-
-def display_requests(requests):
-    if not requests:
-        return
-
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] Network requests (last second):")
-    for (request_type, src_ip, dst_ip, port), count in sorted(requests.items()):
-        print(
-            f"  {request_type}: {display_name(src_ip)} -> "
-            f"{display_name(dst_ip)} | port={port} | requests={count}"
+def _local_addresses():
+    addresses = {"127.0.0.1"}
+    try:
+        addresses.update(
+            get_if_addr(interface)
+            for interface in get_if_list()
+            if get_if_addr(interface) not in {"0.0.0.0", "127.0.0.1"}
         )
+    except OSError:
+        pass
+
+    try:
+        addresses.add(socket.gethostbyname(socket.gethostname()))
+    except socket.gaierror:
+        pass
+    return addresses
 
 
-def run_sniffer(interface=None):
+def packet_to_record(packet):
+    """Convert a captured Scapy packet into the aggregator input schema."""
+    if IP not in packet:
+        return None
+
+    record = {
+        "ts": time.time(),
+        "src_ip": packet[IP].src,
+        "dst_ip": packet[IP].dst,
+        "proto": f"IP/{packet[IP].proto}",
+        "sport": None,
+        "dport": None,
+        "tcp_syn": False,
+        "direction": "sortant" if packet[IP].src in _local_addresses() else "local",
+        "dns_query": None,
+        "size": len(packet),
+    }
+
+    if TCP in packet:
+        record["proto"] = "TCP"
+        record["sport"] = packet[TCP].sport
+        record["dport"] = packet[TCP].dport
+        record["tcp_syn"] = bool(packet[TCP].flags & 0x02)
+    elif UDP in packet:
+        record["proto"] = "UDP"
+        record["sport"] = packet[UDP].sport
+        record["dport"] = packet[UDP].dport
+
+    if DNS in packet and packet[DNS].qr == 0 and packet[DNS].qd:
+        query_name = packet[DNS].qd.qname
+        if isinstance(query_name, bytes):
+            query_name = query_name.rstrip(b".").decode("utf-8", errors="replace")
+        record["dns_query"] = str(query_name).rstrip(".")
+
+    return record
+
+
+def run_sniffer(interface=None, on_window=None, window_seconds=30):
+    """Capture packets and pass each time window to ``on_window``."""
     interface = interface or os.getenv("NETWORK_INTERFACE") or None
-    requests = defaultdict(int)
+    on_window = on_window or _print_window
 
+    def collect(packet, records):
+        record = packet_to_record(packet)
+        if record is not None:
+            records.append(record)
+
+    records = []
     while True:
         try:
             sniff(
                 iface=interface,
-                prn=lambda packet: packet_callback(packet, requests),
+                prn=lambda packet: collect(packet, records),
                 filter="ip",
                 store=False,
-                timeout=1,
+                timeout=window_seconds,
             )
-            display_requests(requests)
-            requests.clear()
+            window_records = records[:]
+            records.clear()
+            on_window(window_records)
         except KeyboardInterrupt:
-            display_requests(requests)
+            if records:
+                on_window(records)
             print("Stopping network sniffer.")
             return
+
+
+def _print_window(records):
+    for record in records:
+        print(record)

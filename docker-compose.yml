@@ -9,4 +9,7 @@ services:
       - NET_RAW
     environment:
       NETWORK_INTERFACE: ${NETWORK_INTERFACE:-}
+      TRAFFIC_LOG_PATH: /app/data/traffic.jsonl
+    volumes:
+      - ./data:/app/data
     restart: unless-stopped
