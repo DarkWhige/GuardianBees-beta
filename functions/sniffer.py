@@ -60,7 +60,7 @@ def packet_to_record(packet):
     return record
 
 
-def run_sniffer(interface=None, on_window=None, window_seconds=30):
+def run_sniffer(interface=None, on_window=None, window_seconds=30, stop_event=None):
     """Capture packets and pass each time window to ``on_window``."""
     interface = interface or os.getenv("NETWORK_INTERFACE") or None
     on_window = on_window or _print_window
@@ -71,7 +71,7 @@ def run_sniffer(interface=None, on_window=None, window_seconds=30):
             records.append(record)
 
     records = []
-    while True:
+    while stop_event is None or not stop_event.is_set():
         try:
             sniff(
                 iface=interface,

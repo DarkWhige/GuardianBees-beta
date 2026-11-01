@@ -12,4 +12,5 @@ services:
       TRAFFIC_LOG_PATH: /app/data/traffic.jsonl
     volumes:
       - ./data:/app/data
+      - ./models:/app/models
     restart: unless-stopped
