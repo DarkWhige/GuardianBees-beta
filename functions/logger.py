@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from functions.features import FEATURES
+from functions.DataProcess.features import FEATURES
 
 
 DEFAULT_LOG_PATH = "data/traffic.jsonl"

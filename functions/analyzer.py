@@ -6,11 +6,12 @@ import threading
 import joblib
 from sklearn.ensemble import IsolationForest
 
-from functions.agregator import aggregate
+from functions.DataProcess.agregator import aggregate
 from functions.alerts import anomaly_detected
-from functions.features import FEATURES
+from functions.DataProcess.features import FEATURES
 from functions.logger import load_training_data, log_traffic
-from functions.sniffer import run_sniffer
+from functions.DataProcess.sniffer import run_sniffer
+from functions.AI.MetaAI import MetaAIClient
 
 
 def validate_features(features):
@@ -30,6 +31,7 @@ class AnalyzerRuntime:
         self._lock = threading.Lock()
         self._stop_event = None
         self._sniffer = None
+        self._ai = MetaAIClient()
 
     def train(self):
         baseline = load_training_data()
@@ -85,7 +87,8 @@ class AnalyzerRuntime:
             anomaly_detected(
                 scored[scored["anomaly"]].sort_values(
                     "score", ascending=False
-                )
+                ),
+                ai_client=self._ai,
             )
 
         print(features.to_json(orient="records", date_format="iso"), flush=True)

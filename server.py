@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from functions.analyzer import AnalyzerRuntime
 from route.analyzer import router as analyzer_router
+from route.aiTests import router as ai_router
 from route.base import router as base_router
 
 
@@ -26,6 +27,7 @@ async def lifespan(app):
 app = FastAPI(title="GuardianBees API", lifespan=lifespan)
 app.include_router(base_router)
 app.include_router(analyzer_router)
+app.include_router(ai_router)
 
 
 if __name__ == "__main__":

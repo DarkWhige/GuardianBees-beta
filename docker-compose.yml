@@ -3,6 +3,8 @@ services:
     build:
       context: .
     container_name: guardianbees
+    env_file:
+      - .env
     network_mode: host
     cap_add:
       - NET_ADMIN

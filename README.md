@@ -1,216 +1,251 @@
 # GuardianBees Beta
 
-**Real-time home network anomaly detection powered by AI**
+GuardianBees is a Python backend that detects unusual network behavior. It
+captures traffic, aggregates it into behavioral features, scores those features
+with an Isolation Forest, and sends only detected anomalies to Meta Model API
+for a human-readable security assessment.
 
-Detect unusual network behavior in seconds. GuardianBees monitors your network traffic using Meta's AI models to identify threats, suspicious devices, and potential security issues—all running locally on your machine.
+## Runtime pipeline
 
-## Features
-
-**Real-time Anomaly Detection**
-- Monitors network packets in real-time
-- AI-powered pattern recognition using Meta's Muse Spark Open
-- Detects behavioral anomalies within seconds
-
-**Privacy-First**
-- All processing happens locally, zero data sent to external servers or machines
-- Network analysis stays on your machine
-- No cloud dependencies required
-
-**Lightweight**
-- Runs on Raspberry Pi, old laptops, or any Linux machine
-- Minimal resource usage
-- CLI-based for efficiency
-
-**Practical Use Cases**
-- Detect ransomware or malware communication attempts
-- Monitor for unusual device behavior
-- Identify unauthorized network access
-- Network surveillance for home/small business
-
-## How It Works
-
+```text
+Network packets
+      |
+      v
+Scapy sniffer
+      |
+      v
+Normalized packet events
+      |
+      v
+30-second aggregation per source IP
+      |
+      v
+Traffic history (data/traffic.jsonl)
+      |
+      v
+Isolation Forest anomaly detection
+      |
+      +---- normal behavior allow-list --> skip Meta
+      |
+      v
+Meta Model API analysis
+      |
+      v
+JSON alert printed by the backend
 ```
-Network Traffic → Packet Capture → Feature Extraction → AI Analysis → Alerts
-                    (scapy)           (statistics)     (Muse Spark)   (JSON)
-```
 
-1. **Captures** network packets from your interface
-2. **Extracts** meaningful features (IPs, ports, protocols, patterns)
-3. **Analyzes** with Meta's Muse Spark Open model running locally
-4. **Alerts** you when anomalies are detected
-5. **Logs** everything for later review
+### 1. Backend startup
+
+`server.py` starts a FastAPI application with Uvicorn. During application
+startup, `AnalyzerRuntime`:
+
+1. Loads the retained traffic history.
+2. Trains an Isolation Forest when at least two records are available.
+3. Starts the network sniffer in a background thread.
+
+If there is not enough history, the server still starts, but live windows are
+only logged until the detector is trained. Training can also be requested later
+with `POST /analyzer/train`.
+
+### 2. Network sniffing
+
+`functions/DataProcess/sniffer.py` uses Scapy to capture IPv4 packets. Each
+packet is converted into a normalized event containing:
+
+- timestamp, source and destination IP;
+- protocol and ports;
+- TCP SYN information;
+- direction;
+- DNS query name;
+- packet size.
+
+Packet capture normally requires `NET_RAW`, `NET_ADMIN`, or equivalent host
+permissions.
+
+### 3. Processing and aggregation
+
+`functions/DataProcess/agregator.py` groups events into 30-second windows per
+source IP. It calculates requests, unique ports, destinations and protocols,
+bytes, SYN requests, direction counts, and DNS query information.
+
+### 4. Storage
+
+`functions/logger.py` appends aggregated windows to
+`data/traffic.jsonl`. Records older than 30 days are removed when the log is
+updated. Docker mounts `./data` so traffic history, Meta usage information, and
+the normal-behavior list survive container recreation.
+
+### 5. Isolation Forest analysis
+
+`functions/analyzer.py` trains `sklearn.ensemble.IsolationForest` from the
+numeric features in the retained traffic history. Each new window receives an
+anomaly score and is marked as anomalous when the model predicts `-1`.
+
+Models are saved as timestamped files in `models/`. The latest trained model is
+kept in memory and used for live windows.
+
+### 6. Meta analysis
+
+Only anomalous windows are passed to `functions/AI/MetaAI.py`. The client sends
+aggregated metrics, not raw packets, to Meta Model API. Meta is asked to return:
+
+- `is_alert`;
+- `danger_score` from 0 to 10;
+- `severity` (`low`, `medium`, `high`, or `critical`);
+- a short `summary`;
+- one concrete `action`.
+
+Calls are limited by `META_AI_MAX_CALLS_PER_DAY` and counted in
+`data/meta_ai_usage.json`. A normal-behavior allow-list can skip Meta entirely
+for behavior patterns confirmed as safe by the user.
 
 ## Requirements
 
-- **Python 3.8+**
-- **Ollama** (for running Muse Spark Open locally)
-- **Linux/macOS** (primary support; Windows via WSL)
-- **Network interface access** (may require sudo)
-
-## Quick Start
-
-### 1. Install Ollama
-
-Download and install from [ollama.ai](https://ollama.ai)
-
-```bash
-# macOS
-brew install ollama
-
-# Linux
-curl https://ollama.ai/install.sh | sh
-```
-
-### 2. Pull the Meta Model
-
-```bash
-ollama pull meta-models/muse-spark-open-1026
-```
-
-### 3. Start Ollama Server
-
-```bash
-ollama serve
-# Runs on http://localhost:11434
-```
-
-### 4. Install GuardianBees
-
-```bash
-git clone https://github.com/yourusername/GuardianBees-beta.git
-cd GuardianBees-beta
-pip install -r requirements.txt
-```
-
-### 5. Run the Sniffer
-
-```bash
-sudo python sniffer.py
-# (sudo required for packet capture)
-```
-
-You should see output like:
-
-```
-[2026-10-29 10:15:23] Starting GuardianBees Beta...
-[2026-10-29 10:15:24] Connected to Ollama at localhost:11434
-[2026-10-29 10:15:25] Listening on eth0...
-[2026-10-29 10:15:47] Analyzing packets...
-[2026-10-29 10:16:12] 🚨 ALERT: Unusual port access detected from 192.168.1.50
-  Reason: Device connecting to rare port 8080
-  Confidence: 7/10
-```
-
-Alerts are saved to `alerts.json`.
-
-## Project Structure
-
-```
-GuardianBees-beta/
-├── sniffer.py          # Main packet capture + analysis loop
-├── analyzer.py         # Feature extraction + Muse Spark integration
-├── alerts.py           # Alert generation and logging
-├── requirements.txt    # Python dependencies
-├── README.md           # This file
-└── LICENSE             # MIT License
-```
+- Docker and Docker Compose
+- Linux host recommended for packet capture
+- A Meta Model API key
+- A network interface accessible to the Docker host
 
 ## Configuration
 
-Create a `.env` file to customize behavior (optional):
+Create `.env` next to `docker-compose.yml`:
 
-```
+```env
+MODEL_API_KEY=your_meta_model_api_key
+META_AI_MODEL=muse-spark-1.3
+META_AI_MAX_CALLS_PER_DAY=100
 NETWORK_INTERFACE=eth0
-OLLAMA_URL=http://localhost:11434
-ALERT_THRESHOLD=6
-FEATURE_EXTRACTION_INTERVAL=10
 ```
 
-## Output
+`.env` is ignored by Git. Use plain values; do not write Docker interpolation
+expressions such as `META_AI_MAX_CALLS_PER_DAY:-100` in this file.
 
-All alerts are saved to `alerts.json`:
+`docker-compose.yml` loads `.env` into the container with `env_file`. The
+Compose service uses host networking and adds packet-capture capabilities.
 
-```json
-{
-  "alerts": [
-    {
-      "timestamp": "2026-10-29T10:16:12Z",
-      "device_ip": "192.168.1.50",
-      "anomaly_type": "unusual_port_access",
-      "description": "Device connecting to rare port 8080",
-      "confidence": 7,
-      "raw_data": {
-        "ports": [8080, 443, 80],
-        "protocol_shift": 0.45,
-        "volume_deviation": 2.1
-      }
-    }
-  ]
-}
-```
+## Run with Docker
 
-## Limitations & Known Issues
-
-⚠️ **This is a beta release**
-
-- **No UI yet** — CLI only for now
-- **Feature extraction** is basic — only learns from your current network
-- **Ollama required** — must run locally (no API fallback yet)
-- **Linux/macOS only** — Windows support planned
-- **Requires root/sudo** — packet capture needs elevated privileges
-
-## Future Roadmap
-
-- [ ] Web dashboard for alerts
-- [ ] Historical trend analysis
-- [ ] IP blocking integration
-- [ ] Parental controls module
-- [ ] Multi-device coordination (swarm mode)
-- [ ] Windows support
-- [ ] Custom model training
-
-## Technology Stack
-
-- **Packet Capture:** Scapy
-- **AI Model:** Meta's Muse Spark Open (via Ollama)
-- **Storage:** JSON + SQLite
-- **Language:** Python 3.8+
-
-## Contributing
-
-GuardianBees Beta is open source under the MIT License. Contributions welcome!
+Build and start the backend:
 
 ```bash
-git clone <repo>
-git checkout -b feature/your-feature
-git commit -m "Add your feature"
-git push origin feature/your-feature
+./scripts/run/run_dev.sh
 ```
 
-Then open a Pull Request.
+Use `--build` after changing Python code so the image contains the latest
+source files. Stop the service with:
+
+```bash
+docker compose down
+```
+
+The API listens on `http://localhost:8000`.
+
+## Backend routes
+
+### Health
+
+```http
+GET /health
+```
+
+Returns:
+
+```json
+{"status": "ok"}
+```
+
+### Train the detector
+
+```http
+POST /analyzer/train
+```
+
+Trains a new Isolation Forest from the retained traffic history and saves it
+under `models/`.
+
+### Detector status
+
+```http
+GET /analyzer/status
+```
+
+Returns whether a model is loaded, the number of training records, and its path.
+
+### Test Meta manually
+
+```http
+POST /ai/test
+Content-Type: application/json
+```
+
+An empty JSON object uses the route defaults:
+
+```json
+{}
+```
+
+The response contains the selected model and the structured Meta analysis.
+
+### Confirm a behavior as normal
+
+```http
+POST /ai/normal-behaviors
+Content-Type: application/json
+```
+
+Send the same aggregated metrics as `/ai/test`. The behavior is persisted in
+`data/normal_behaviors.json`. Future matching anomaly alerts skip the Meta
+request.
+
+### List normal behaviors
+
+```http
+GET /ai/normal-behaviors
+```
+
+Returns the behavior signatures currently excluded from Meta analysis.
+
+## Project structure
+
+```text
+GuardianBees-beta/
+├── server.py                         # FastAPI/Uvicorn entrypoint
+├── route/
+│   ├── base.py                       # Health route
+│   ├── analyzer.py                   # Training and detector status routes
+│   └── aiTests.py                    # Meta test and normal-behavior routes
+├── functions/
+│   ├── analyzer.py                   # Runtime, training, scoring, sniffer loop
+│   ├── alerts.py                     # Alert creation and Meta dispatch
+│   ├── normalBehaviors.py            # Persistent normal-behavior allow-list
+│   ├── logger.py                     # Traffic history persistence
+│   ├── AI/MetaAI.py                  # Meta Model API client
+│   └── DataProcess/
+│       ├── sniffer.py                # Scapy packet capture
+│       ├── agregator.py              # Window aggregation
+│       └── features.py               # Model feature definitions
+├── data/                             # Persistent traffic and runtime state
+├── models/                           # Versioned Isolation Forest models
+├── docker-compose.yml
+├── Dockerfile
+└── requirements.txt
+```
+
+## Alert behavior
+
+An alert is emitted as a JSON record on the backend logs. It includes the
+source IP, time window, anomaly score, observed aggregated metrics, and—when
+enabled and available—the Meta analysis. If a matching behavior is in the
+normal-behavior list, the alert is marked as normal and Meta is not called.
+
+## Limitations
+
+- This is a beta detector and can produce false positives.
+- Isolation Forest quality depends on the retained local baseline.
+- Meta analysis requires network access and a valid API key.
+- Only aggregated network metadata is sent to Meta; raw packets are not sent.
+- Packet capture support is primarily intended for Linux with host networking.
 
 ## License
 
-MIT License — See [LICENSE](LICENSE) file for details.
-
-**Free for personal, educational, and non-commercial use.**
-
-## Support
-
-- **Issues:** GitHub Issues
-- **Discussions:** GitHub Discussions
-- **Email:** clement.duboille@gmail.com
-
-## About
-
-**GuardianBees** is built for the Meta Global AI Developer Hackathon 2026.
-
-Inspired by the need for accessible, intelligent home network security using cutting-edge AI models.
-
----
-
-**Status:** Beta (actively developed during hackathon)
-
-**Last Updated:** October 29, 2026
-
-**Author:** DarkWhige
+MIT License. See [LICENSE](./LICENSE).

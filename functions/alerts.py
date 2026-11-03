@@ -1,7 +1,9 @@
 import json
 
+from functions.normalBehaviors import is_normal_behavior
 
-def anomaly_detected(anomalies):
+
+def anomaly_detected(anomalies, ai_client=None):
     """Print the details of each anomalous traffic window."""
     if anomalies is None or anomalies.empty:
         return
@@ -25,4 +27,11 @@ def anomaly_detected(anomalies):
             "anomaly_score": score,
             "observed": observed,
         }
+        if is_normal_behavior(alert):
+            alert["normal_behavior"] = True
+            alert["ai_skipped"] = True
+        elif ai_client is not None:
+            ai_analysis = ai_client.analyze(record)
+            if ai_analysis is not None:
+                alert["ai_analysis"] = ai_analysis
         print(f"ALERT {json.dumps(alert, separators=(',', ':'))}", flush=True)
