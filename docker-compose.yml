@@ -1,10 +1,11 @@
 services:
-  guardianbees:
+
+  backend:
     build:
-      context: .
-    container_name: guardianbees
+      context: ./backend
+    container_name: guardianbees-backend
     env_file:
-      - .env
+      - .env.backend
     network_mode: host
     cap_add:
       - NET_ADMIN
@@ -12,7 +13,20 @@ services:
     environment:
       NETWORK_INTERFACE: ${NETWORK_INTERFACE:-}
       TRAFFIC_LOG_PATH: /app/data/traffic.jsonl
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
     volumes:
-      - ./data:/app/data
-      - ./models:/app/models
+      - ./backend/data:/app/data
+      - ./backend/models:/app/models
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: guardianbees-frontend
+    env_file:
+      - .env.frontend
+    ports:
+      - "${FRONTEND_LAN_IP:?Set FRONTEND_LAN_IP to the host LAN IP}:3000:80"
+    depends_on:
+      - backend
     restart: unless-stopped

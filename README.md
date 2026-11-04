@@ -108,37 +108,89 @@ for behavior patterns confirmed as safe by the user.
 
 ## Configuration
 
-Create `.env` next to `docker-compose.yml`:
+Create `.env.backend` next to `docker-compose.yml`:
 
 ```env
 MODEL_API_KEY=your_meta_model_api_key
 META_AI_MODEL=muse-spark-1.3
 META_AI_MAX_CALLS_PER_DAY=100
 NETWORK_INTERFACE=eth0
+FRONTEND_LAN_IP=192.168.1.20
+FRONTEND_ORIGIN=http://192.168.1.20:3000
 ```
 
-`.env` is ignored by Git. Use plain values; do not write Docker interpolation
+`.env.backend` is ignored by Git. Use plain values; do not write Docker interpolation
 expressions such as `META_AI_MAX_CALLS_PER_DAY:-100` in this file.
 
-`docker-compose.yml` loads `.env` into the container with `env_file`. The
-Compose service uses host networking and adds packet-capture capabilities.
+The backend service loads `.env.backend` into the container with `env_file`.
+The development script also passes this file to Compose with `--env-file`,
+because Compose evaluates variables used in `ports` before starting containers.
+The backend uses host networking and has the capabilities required for packet
+capture.
+
+Set `FRONTEND_LAN_IP` to the server's private LAN address. The frontend is
+published only on that address, not on all host interfaces. Set
+`FRONTEND_ORIGIN` to the corresponding frontend URL so the backend accepts
+browser requests from the LAN.
 
 ## Run with Docker
 
-Build and start the backend:
+Build and start the backend and frontend:
 
 ```bash
 ./scripts/run/run_dev.sh
 ```
 
-Use `--build` after changing Python code so the image contains the latest
-source files. Stop the service with:
+The script runs:
 
 ```bash
-docker compose down
+docker compose --env-file .env.backend up --build
 ```
 
-The API listens on `http://localhost:8000`.
+Use `--build` after changing Python or React code so the images contain the
+latest source files. Stop the services with:
+
+```bash
+docker compose --env-file .env.backend down
+```
+
+The backend API listens on port `8000`. The frontend is available at:
+
+```text
+http://<FRONTEND_LAN_IP>:3000
+```
+
+For example:
+
+```text
+http://192.168.1.72:3000
+```
+
+The frontend port is bound only to `FRONTEND_LAN_IP`, so it is not published
+on all host interfaces. `localhost:3000` is intentionally unavailable unless
+`FRONTEND_LAN_IP` is set to `127.0.0.1`.
+
+## Frontend
+
+The frontend is a React application built with Vite and served in production
+by Nginx. Its source is in `frontend/src/`. The Docker image automatically
+installs the Node dependencies, builds the application with Vite, and serves
+the generated files with Nginx.
+
+The interface provides:
+
+- backend health and Isolation Forest status;
+- training record count;
+- manual Meta alert analysis;
+- danger score, severity, summary, and recommended action;
+- marking a behavior as normal;
+- viewing the normal-behavior allow-list.
+
+The frontend calls the backend on port `8000` using the browser's current
+hostname. Access the interface through the LAN address configured in
+`FRONTEND_LAN_IP`.
+
+The regular Docker workflow uses the production build served by Nginx.
 
 ## Backend routes
 
@@ -209,26 +261,34 @@ Returns the behavior signatures currently excluded from Meta analysis.
 
 ```text
 GuardianBees-beta/
-├── server.py                         # FastAPI/Uvicorn entrypoint
-├── route/
-│   ├── base.py                       # Health route
-│   ├── analyzer.py                   # Training and detector status routes
-│   └── aiTests.py                    # Meta test and normal-behavior routes
-├── functions/
-│   ├── analyzer.py                   # Runtime, training, scoring, sniffer loop
-│   ├── alerts.py                     # Alert creation and Meta dispatch
-│   ├── normalBehaviors.py            # Persistent normal-behavior allow-list
-│   ├── logger.py                     # Traffic history persistence
-│   ├── AI/MetaAI.py                  # Meta Model API client
-│   └── DataProcess/
-│       ├── sniffer.py                # Scapy packet capture
-│       ├── agregator.py              # Window aggregation
-│       └── features.py               # Model feature definitions
-├── data/                             # Persistent traffic and runtime state
-├── models/                           # Versioned Isolation Forest models
+├── backend/
+│   ├── server.py                     # FastAPI/Uvicorn entrypoint
+│   ├── route/
+│   │   ├── base.py                   # Health route
+│   │   ├── analyzer.py               # Training and detector status routes
+│   │   └── aiTests.py                # Meta test and normal-behavior routes
+│   ├── functions/
+│   │   ├── analyzer.py               # Runtime, training, scoring, sniffer loop
+│   │   ├── alerts.py                 # Alert creation and Meta dispatch
+│   │   ├── normalBehaviors.py        # Persistent normal-behavior allow-list
+│   │   ├── logger.py                 # Traffic history persistence
+│   │   ├── AI/MetaAI.py              # Meta Model API client
+│   │   └── DataProcess/
+│   │       ├── sniffer.py             # Scapy packet capture
+│   │       ├── agregator.py           # Window aggregation
+│   │       └── features.py            # Model feature definitions
+│   ├── data/                         # Persistent traffic and runtime state
+│   ├── models/                       # Versioned Isolation Forest models
+│   └── requirements.txt
 ├── docker-compose.yml
-├── Dockerfile
-└── requirements.txt
+├── frontend/
+│   ├── src/App.jsx                   # React monitoring interface
+│   ├── src/main.jsx                  # React entrypoint
+│   ├── src/styles.css                # Interface styles
+│   ├── vite.config.js                # Vite React configuration
+│   └── Dockerfile                    # Vite build and Nginx image
+├── scripts/run/run_dev.sh            # Docker development launcher
+└── README.md
 ```
 
 ## Alert behavior
