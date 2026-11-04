@@ -4,22 +4,6 @@ const API_URL =
   import.meta.env.VITE_API_URL ||
   `${window.location.protocol}//${window.location.hostname}:8000`;
 
-const defaultAlert = {
-  src_ip: "192.168.1.50",
-  window_start: new Date().toISOString(),
-  score: 1.5,
-  requests: 120,
-  n_ports: 18,
-  n_dst: 12,
-  n_proto: 2,
-  bytes: 250000,
-  syn_requests: 80,
-  outgoing_requests: 120,
-  local_requests: 0,
-  n_dns_queries: 35,
-  dns_queries: "example.com, suspicious.test",
-};
-
 async function request(path, options = {}) {
   const response = await fetch(`${API_URL}${path}`, {
     headers: { "Content-Type": "application/json" },
@@ -36,21 +20,24 @@ export default function App() {
   const [health, setHealth] = useState("checking");
   const [status, setStatus] = useState(null);
   const [behaviors, setBehaviors] = useState([]);
-  const [alert, setAlert] = useState(defaultAlert);
-  const [analysis, setAnalysis] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const [windowData, setWindowData] = useState({ window_start: null, records: [] });
+  const [alerts, setAlerts] = useState([]);
   const [error, setError] = useState("");
-
+  const [savingIp, setSavingIp] = useState(null);
   async function refresh() {
     try {
-      const [healthResult, statusResult, behaviorResult] = await Promise.all([
+      const [healthResult, statusResult, behaviorResult, windowResult, alertsResult] = await Promise.all([
         request("/health"),
         request("/analyzer/status"),
         request("/ai/normal-behaviors"),
+        request("/analyzer/window"),
+        request("/analyzer/alerts"),
       ]);
       setHealth(healthResult.status);
       setStatus(statusResult);
       setBehaviors(behaviorResult.behaviors || []);
+      setWindowData(windowResult);
+      setAlerts(alertsResult.alerts || []);
       setError("");
     } catch (requestError) {
       setHealth("offline");
@@ -60,49 +47,55 @@ export default function App() {
 
   useEffect(() => {
     refresh();
+    const interval = window.setInterval(refresh, 5000);
+    return () => window.clearInterval(interval);
   }, []);
 
-  async function analyze(event) {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      const result = await request("/ai/test", {
-        method: "POST",
-        body: JSON.stringify(alert),
-      });
-      setAnalysis(result);
-    } catch (requestError) {
-      setError(requestError.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function markNormal() {
-    setBusy(true);
+  async function markFalseAlert(record) {
+    setSavingIp(record.src_ip);
     setError("");
     try {
       await request("/ai/normal-behaviors", {
         method: "POST",
-        body: JSON.stringify(alert),
+        body: JSON.stringify({
+          src_ip: record.src_ip,
+          window_start: record.window_start,
+          requests: record.requests,
+          n_ports: record.n_ports,
+          n_dst: record.n_dst,
+          n_proto: record.n_proto,
+          bytes: record.bytes,
+          syn_requests: record.syn_requests,
+          outgoing_requests: record.outgoing_requests,
+          local_requests: record.local_requests,
+          n_dns_queries: record.n_dns_queries,
+          dns_queries: record.dns_queries || "",
+        }),
+      });
+      await request(`/analyzer/alerts/${encodeURIComponent(record.src_ip)}/resolve`, {
+        method: "POST",
       });
       await refresh();
     } catch (requestError) {
       setError(requestError.message);
     } finally {
-      setBusy(false);
+      setSavingIp(null);
     }
   }
 
-  function updateField(event) {
-    const { name, value } = event.target;
-    setAlert((current) => ({
-      ...current,
-      [name]: ["score", "requests", "n_ports", "n_dst", "n_proto", "bytes",
-        "syn_requests", "outgoing_requests", "local_requests", "n_dns_queries"]
-        .includes(name) ? Number(value) : value,
-    }));
+  async function resolveAlert(record) {
+      setSavingIp(record.src_ip);
+      setError("");
+      try {
+        await request(`/analyzer/alerts/${encodeURIComponent(record.src_ip)}/resolve`, {
+          method: "POST",
+        });
+        await refresh();
+      } catch (requestError) {
+        setError(requestError.message);
+      } finally {
+        setSavingIp(null);
+    }
   }
 
   return (
@@ -134,38 +127,86 @@ export default function App() {
           </div>
         </article>
 
-        <article className="card">
+        <article className="card batch-card">
           <div className="card-title">
-            <h2>Meta analysis</h2>
-            <span className="tag">muse-spark</span>
+            <div>
+              <h2>Meta analysis</h2>
+              <p className="card-caption">Latest 30-second batch</p>
+            </div>
+            <span className="tag">{windowData.records.length} IP</span>
           </div>
-          <form onSubmit={analyze}>
-            <div className="form-grid">
-              <label>Source IP<input name="src_ip" value={alert.src_ip} onChange={updateField} /></label>
-              <label>Anomaly score<input name="score" type="number" step="0.1" value={alert.score} onChange={updateField} /></label>
-              <label>Requests<input name="requests" type="number" value={alert.requests} onChange={updateField} /></label>
-              <label>Unique ports<input name="n_ports" type="number" value={alert.n_ports} onChange={updateField} /></label>
-              <label>Destinations<input name="n_dst" type="number" value={alert.n_dst} onChange={updateField} /></label>
-              <label>Bytes<input name="bytes" type="number" value={alert.bytes} onChange={updateField} /></label>
+          {windowData.records.length === 0 ? <p className="empty">No traffic in the latest batch.</p> : (
+            <div className="window-list">
+              {windowData.records.map((record) => (
+                <div className="window-row" key={`${record.src_ip}-${record.window_start}`}>
+                  <strong>{record.src_ip}</strong>
+                  <span className={`event ${record.status}`}>
+                    {record.status === "meta-error" ? "Meta error" : record.status === "ai-alert" ? "AI alert" : record.status === "anomaly" ? "Alert detected" : "Normal traffic"}
+                  </span>
+                  <span>{record.requests} requests · {record.n_ports} ports · {record.n_dst} destinations</span>
+                  <span className="danger-score">{record.danger_score_pct}%</span>
+                </div>
+              ))}
             </div>
-            <label>DNS queries<input name="dns_queries" value={alert.dns_queries} onChange={updateField} /></label>
-            <div className="actions">
-              <button disabled={busy}>{busy ? "Analyzing..." : "Analyze alert"}</button>
-              <button type="button" className="secondary" onClick={markNormal} disabled={busy}>Mark as normal</button>
-            </div>
-          </form>
+          )}
         </article>
+      </section>
 
-        <article className="card result">
-          <div className="card-title"><h2>Assessment</h2></div>
-          {analysis ? (
-            <div className="assessment">
-              <div className="score">{analysis.analysis.danger_score}<small>/10</small></div>
-              <div><span className="severity">{analysis.analysis.severity}</span><p>{analysis.analysis.summary}</p></div>
-              <div className="action"><strong>Recommended action</strong><span>{analysis.analysis.action}</span></div>
-            </div>
-          ) : <p className="empty">Run an analysis to see the AI assessment.</p>}
-        </article>
+      <section className="alerts-panel">
+        <div className="card-title">
+          <div>
+            <h2>Detected alerts</h2>
+            <p className="card-caption">Details of behaviors requiring your attention</p>
+          </div>
+          <span className="alert-count">{alerts.length}</span>
+        </div>
+        {alerts.length === 0 ? <p className="empty">No active alerts.</p> : (
+          <div className="alert-list">
+            {alerts.map((record) => (
+              <article className={`alert-card ${record.status}`} key={`alert-${record.src_ip}-${record.window_start}`}>
+                <div className="alert-card-header">
+                  <div>
+                    <span className="alert-label">
+                      {record.status === "meta-error" ? "Meta error" : record.status === "ai-alert" ? "AI alert" : "Detected anomaly"}
+                    </span>
+                    <h3>{record.src_ip}</h3>
+                  </div>
+                  <div className="alert-score">
+                    <strong>{record.danger_score_pct}%</strong>
+                    <span>danger score</span>
+                  </div>
+                </div>
+                <div className="alert-facts">
+                  <span><strong>{record.requests}</strong> requests</span>
+                  <span><strong>{record.n_ports}</strong> ports</span>
+                  <span><strong>{record.n_dst}</strong> destinations</span>
+                  <span><strong>{record.bytes}</strong> bytes</span>
+                </div>
+                <div className="alert-content">
+                  <p><strong>Description</strong>{record.description}</p>
+                  <p><strong>IP owner</strong>{record.ip_owner || "Unknown organization"}</p>
+                  <p><strong>Direction</strong>{record.traffic_direction || "Unknown"}</p>
+                  <p><strong>Destination ports</strong>{record.dst_ports || "Unknown"}</p>
+                  {record.threat_indicators?.length > 0 && (
+                    <p><strong>Indicators</strong>{record.threat_indicators.join(" · ")}</p>
+                  )}
+                  <p><strong>Meta summary</strong>{record.summary || "Meta AI unavailable or provided no confirmation."}</p>
+                  <p><strong>Severity</strong>{record.severity || "Unconfirmed"}</p>
+                  <p><strong>Recommended action</strong>{record.action || "Check this IP address."}</p>
+                </div>
+                <div className="alert-actions">
+                  <button
+                    className="secondary"
+                    onClick={() => markFalseAlert(record)}
+                    disabled={savingIp === record.src_ip}
+                  >
+                    {savingIp === record.src_ip ? "Saving..." : "False alert"}
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="card list">

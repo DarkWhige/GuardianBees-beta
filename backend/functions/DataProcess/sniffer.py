@@ -36,7 +36,7 @@ def packet_to_record(packet):
         "sport": None,
         "dport": None,
         "tcp_syn": False,
-        "direction": "sortant" if packet[IP].src in _local_addresses() else "local",
+        "direction": "outbound" if packet[IP].src in _local_addresses() else "inbound",
         "dns_query": None,
         "size": len(packet),
     }

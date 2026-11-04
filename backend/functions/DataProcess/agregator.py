@@ -14,6 +14,7 @@ FEATURE_COLUMNS = [
     "local_requests",
     "n_dns_queries",
     "dns_queries",
+    "dst_ports",
 ]
 
 
@@ -42,8 +43,8 @@ def aggregate(packets, window="30s"):
     frame["dport"] = pd.to_numeric(frame["dport"], errors="coerce")
     frame["size"] = pd.to_numeric(frame["size"], errors="raise")
     frame["tcp_syn"] = frame["tcp_syn"].astype(bool)
-    frame["is_outgoing"] = frame["direction"].eq("sortant")
-    frame["is_local"] = frame["direction"].eq("local")
+    frame["is_outgoing"] = frame["direction"].eq("outbound")
+    frame["is_local"] = frame["direction"].eq("inbound")
 
     features = (
         frame.groupby(
@@ -66,6 +67,13 @@ def aggregate(packets, window="30s"):
             dns_queries=(
                 "dns_query",
                 lambda values: ", ".join(sorted(set(values.dropna()))),
+            ),
+            dst_ports=(
+                "dport",
+                lambda values: ", ".join(
+                    str(int(port))
+                    for port in sorted(values.dropna().unique())
+                ),
             ),
         )
         .reset_index()

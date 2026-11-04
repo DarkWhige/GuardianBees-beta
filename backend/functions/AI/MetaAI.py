@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -29,37 +30,53 @@ class MetaAIClient:
 
     def analyze(self, alert):
         """Return a structured analysis, or ``None`` if the call is unavailable."""
-        if not self.api_key or not self._can_call():
+        source_ip = alert.get("src_ip", "unknown")
+        if not self.api_key:
+            print(f"Meta AI skipped for {source_ip}: API key is missing.", flush=True)
+            return None
+        if not self._can_call():
+            print(f"Meta AI skipped for {source_ip}: daily limit reached.", flush=True)
             return None
 
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return exactly ONE JSON object and NOTHING else. "
+                        "Do not reason aloud. Do not use Markdown. Use "
+                        "exactly these keys: is_alert, danger_score, "
+                        "severity, summary, action. Types: boolean, "
+                        "integer 0-10, null or one of low/medium/high/"
+                        "critical, string, string. Example: "
+                        "{\"is_alert\":false,\"danger_score\":1,"
+                        "\"severity\":null,\"summary\":\"Normal traffic\","
+                        "\"action\":\"No action\"}. Analyze all "
+                        "provided fields together. Known cloud, GitHub, "
+                        "Microsoft or CDN ownership is not suspicious "
+                        "alone. Mark true only for credible scanning, "
+                        "exploitation, compromise or lateral movement. "
+                        "For false, severity must be null and action must "
+                        "be No action. Output the JSON immediately."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(alert, ensure_ascii=False),
+                },
+            ],
+            "reasoning_effort": "minimal",
+            "max_completion_tokens": 4096,
+        }
+        print(
+            f"Meta AI request started for {source_ip}: "
+            f"model={self.model}, payload_bytes={len(json.dumps(payload))}.",
+            flush=True,
+        )
         request = Request(
             self.endpoint,
-            data=json.dumps(
-                {
-                    "model": self.model,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are a network security expert. Determine "
-                                "whether this alert is genuinely concerning. "
-                                "Reply only with valid JSON containing exactly "
-                                "these fields: is_alert (boolean), danger_score "
-                                "(integer from 0 to 10), severity (low, medium, "
-                                "high, or critical), summary (very short), and "
-                                "action (one concrete action). Use only the "
-                                "provided data."
-                            ),
-                        },
-                        {
-                            "role": "user",
-                            "content": json.dumps(alert, ensure_ascii=False),
-                        },
-                    ],
-                    "reasoning_effort": "minimal",
-                    "max_completion_tokens": 512,
-                }
-            ).encode("utf-8"),
+            data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
@@ -69,13 +86,34 @@ class MetaAIClient:
 
         try:
             with urlopen(request, timeout=15) as response:
-                body = json.loads(response.read().decode("utf-8"))
+                raw_body = response.read().decode("utf-8")
+                print(
+                    f"Meta AI response received for {source_ip}: "
+                    f"http={response.status}, bytes={len(raw_body)}.",
+                    flush=True,
+                )
+                body = json.loads(raw_body)
             self._record_call()
-            return self._parse(body)
+            result = self._parse(body)
+            print(
+                f"Meta AI parsed for {source_ip}: "
+                f"is_alert={result['is_alert']}, severity={result['severity']}.",
+                flush=True,
+            )
+            return result
         except HTTPError as error:
-            print(f"Meta AI request failed with HTTP {error.code}.", flush=True)
+            details = error.read().decode("utf-8", errors="replace")
+            print(
+                f"Meta AI request failed for {source_ip} with HTTP "
+                f"{error.code}: {details}",
+                flush=True,
+            )
         except (URLError, TimeoutError, ValueError, KeyError, TypeError) as error:
-            print(f"Meta AI request failed: {error}.", flush=True)
+            print(
+                f"Meta AI request failed for {source_ip}: "
+                f"{type(error).__name__}: {error}.",
+                flush=True,
+            )
         return None
 
     def _can_call(self):
@@ -101,15 +139,64 @@ class MetaAIClient:
     @staticmethod
     def _parse(body):
         choice = body["choices"][0]
-        content = choice["message"]["content"]
+        print(
+            "Meta AI completion metadata: "
+            f"finish_reason={choice.get('finish_reason')}, "
+            f"response_keys={sorted(choice.keys())}.",
+            flush=True,
+        )
+        message = choice.get("message", {})
+        content = message.get("content") or message.get("reasoning_content")
+        if isinstance(content, list):
+            content = "".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in content
+            )
         if not content:
             raise ValueError(
-                f"Meta AI returned no text (finish_reason={choice.get('finish_reason')})"
+                "Meta AI returned no text "
+                f"(finish_reason={choice.get('finish_reason')}, "
+                f"message_keys={sorted(message.keys())})"
             )
-        result = json.loads(content.strip().removeprefix("```json").removesuffix("```"))
-        required = {"is_alert", "danger_score", "severity", "summary", "action"}
-        if set(result) != required:
-            raise ValueError("Meta AI returned an unexpected analysis format")
-        if not isinstance(result["danger_score"], int) or not 0 <= result["danger_score"] <= 10:
-            raise ValueError("danger_score must be an integer from 0 to 10")
-        return result
+        text = str(content).strip()
+        result = None
+        for match in re.finditer(r"\{", text):
+            try:
+                candidate, _ = json.JSONDecoder().raw_decode(text[match.start():])
+                if isinstance(candidate, dict):
+                    result = candidate
+                    break
+            except json.JSONDecodeError:
+                continue
+
+        if result is None:
+            return {
+                "is_alert": False,
+                "danger_score": 5,
+                "severity": None,
+                "summary": text[:120],
+                "action": "No action",
+            }
+
+        is_alert = result.get("is_alert", result.get("alert", True))
+        if isinstance(is_alert, str):
+            is_alert = is_alert.lower() in {"true", "yes", "oui", "alert"}
+        is_alert = bool(is_alert)
+        severity = result.get("severity")
+        if not is_alert:
+            severity = None
+        else:
+            severity = str(severity or "medium").lower()
+            if severity not in {"low", "medium", "high", "critical"}:
+                severity = "medium"
+        try:
+            danger_score = int(float(result.get("danger_score", 5)))
+        except (TypeError, ValueError):
+            danger_score = 5
+        return {
+            "is_alert": is_alert,
+            "danger_score": max(0, min(10, danger_score)),
+            "severity": severity,
+            "summary": str(result.get("summary", "Meta analysis received."))[:180],
+            "action": str(result.get("action", "Check this activity."))[:140],
+        }

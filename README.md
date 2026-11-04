@@ -23,15 +23,18 @@ Normalized packet events
 Traffic history (data/traffic.jsonl)
       |
       v
-Isolation Forest anomaly detection
+Isolation Forest anomaly detection (score >= 65%)
       |
       +---- normal behavior allow-list --> skip Meta
       |
       v
-Meta Model API analysis
+Public IP ownership lookup
       |
       v
-JSON alert printed by the backend
+Meta Model API triage for new anomalies
+      |
+      v
+Persistent active alerts and frontend alert cards
 ```
 
 ### 1. Backend startup
@@ -65,8 +68,8 @@ permissions.
 ### 3. Processing and aggregation
 
 `functions/DataProcess/agregator.py` groups events into 30-second windows per
-source IP. It calculates requests, unique ports, destinations and protocols,
-bytes, SYN requests, direction counts, and DNS query information.
+source IP. It calculates requests, unique ports, destination ports, destinations
+and protocols, bytes, SYN requests, direction counts, and DNS query information.
 
 ### 4. Storage
 
@@ -78,26 +81,37 @@ the normal-behavior list survive container recreation.
 ### 5. Isolation Forest analysis
 
 `functions/analyzer.py` trains `sklearn.ensemble.IsolationForest` from the
-numeric features in the retained traffic history. Each new window receives an
-anomaly score and is marked as anomalous when the model predicts `-1`.
+numeric features in the retained traffic history. Each new window receives a normalized anomaly score from 0 to 100. A window is
+forwarded for triage when its score is at least `65`.
 
 Models are saved as timestamped files in `models/`. The latest trained model is
 kept in memory and used for live windows.
 
 ### 6. Meta analysis
 
-Only anomalous windows are passed to `functions/AI/MetaAI.py`. The client sends
-aggregated metrics, not raw packets, to Meta Model API. Meta is asked to return:
+Only new anomalous windows are passed to `functions/AI/MetaAI.py`. An IP already
+stored as an active alert is not sent to Meta again until resolved. The client
+sends aggregated metrics, not raw packets, including destination ports and
+best-effort public IP ownership. Meta is asked to return:
 
 - `is_alert`;
 - `danger_score` from 0 to 10;
-- `severity` (`low`, `medium`, `high`, or `critical`);
+- `severity` (`null`, `low`, `medium`, `high`, or `critical`);
 - a short `summary`;
 - one concrete `action`.
 
-Calls are limited by `META_AI_MAX_CALLS_PER_DAY` and counted in
-`data/meta_ai_usage.json`. A normal-behavior allow-list can skip Meta entirely
-for behavior patterns confirmed as safe by the user.
+If Meta returns `is_alert: false`, the anomaly is treated as a false alert and
+is not stored or displayed. Calls are limited by
+`META_AI_MAX_CALLS_PER_DAY` and counted in `data/meta_ai_usage.json`. A
+normal-behavior allow-list can skip Meta entirely for behavior patterns
+confirmed as safe by the user.
+
+## Active alerts
+
+Unresolved alerts are persisted in `data/active_alerts.json` and exposed through
+`GET /analyzer/alerts`. The frontend refreshes this list automatically and
+displays detailed alert cards. The **False alert** action adds the behavior to
+the normal-behavior allow-list and resolves the active alert.
 
 ## Requirements
 
@@ -181,9 +195,10 @@ The interface provides:
 
 - backend health and Isolation Forest status;
 - training record count;
-- manual Meta alert analysis;
-- danger score, severity, summary, and recommended action;
-- marking a behavior as normal;
+- latest 30-second traffic batch grouped by source IP;
+- persistent alert cards with danger score, IP owner, destination ports,
+  severity, Meta summary, and recommended action;
+- marking an active alert as a false alert;
 - viewing the normal-behavior allow-list.
 
 The frontend calls the backend on port `8000` using the browser's current
@@ -257,6 +272,32 @@ GET /ai/normal-behaviors
 
 Returns the behavior signatures currently excluded from Meta analysis.
 
+### Latest traffic window
+
+```http
+GET /analyzer/window
+```
+
+Returns the latest 30-second traffic batch, excluding source IPs already held
+as active alerts.
+
+### Active alerts
+
+```http
+GET /analyzer/alerts
+```
+
+Returns all unresolved alerts persisted by the backend.
+
+### Resolve an active alert
+
+```http
+POST /analyzer/alerts/{source_ip}/resolve
+```
+
+Removes an active alert so the source IP can be analyzed again. The frontend
+uses this after adding a false alert to the normal-behavior allow-list.
+
 ## Project structure
 
 ```text
@@ -265,11 +306,13 @@ GuardianBees-beta/
 │   ├── server.py                     # FastAPI/Uvicorn entrypoint
 │   ├── route/
 │   │   ├── base.py                   # Health route
-│   │   ├── analyzer.py               # Training and detector status routes
+│   │   ├── analyzer.py               # Detector, batch, and alert routes
 │   │   └── aiTests.py                # Meta test and normal-behavior routes
 │   ├── functions/
 │   │   ├── analyzer.py               # Runtime, training, scoring, sniffer loop
 │   │   ├── alerts.py                 # Alert creation and Meta dispatch
+│   │   ├── activeAlerts.py           # Persistent unresolved alerts
+│   │   ├── ipOwnership.py            # Public IP ownership lookup
 │   │   ├── normalBehaviors.py        # Persistent normal-behavior allow-list
 │   │   ├── logger.py                 # Traffic history persistence
 │   │   ├── AI/MetaAI.py              # Meta Model API client
@@ -294,9 +337,11 @@ GuardianBees-beta/
 ## Alert behavior
 
 An alert is emitted as a JSON record on the backend logs. It includes the
-source IP, time window, anomaly score, observed aggregated metrics, and—when
-enabled and available—the Meta analysis. If a matching behavior is in the
-normal-behavior list, the alert is marked as normal and Meta is not called.
+source IP, time window, anomaly score, observed aggregated metrics, ownership
+context, and—when available—the Meta analysis. Active alerts are persisted and
+are not sent to Meta repeatedly. If Meta returns `is_alert: false`, the anomaly
+is treated as a false alert and is not stored or displayed. A matching
+normal-behavior signature skips Meta.
 
 ## Limitations
 

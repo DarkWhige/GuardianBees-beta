@@ -24,8 +24,8 @@ button {
   border: 0;
   border-radius: 8px;
   padding: 11px 16px;
-  background: #68e0a1;
-  color: #07120d;
+  background: #f4c542;
+  color: #191304;
   font-weight: 700;
 }
 
@@ -50,7 +50,7 @@ button:disabled {
 }
 
 .eyebrow {
-  color: #68e0a1;
+  color: #f4c542;
   font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.16em;
@@ -96,7 +96,7 @@ label span {
 }
 
 .status.online span {
-  background: #68e0a1;
+  background: #f4c542;
 }
 
 .status.offline span {
@@ -139,7 +139,7 @@ label span {
 }
 
 .metrics div {
-  border-left: 2px solid #68e0a1;
+  border-left: 2px solid #f4c542;
   padding-left: 12px;
 }
 
@@ -155,8 +155,8 @@ label span {
 
 .tag,
 .severity {
-  color: #68e0a1;
-  background: #17352b;
+  color: #f4c542;
+  background: #403616;
   border-radius: 999px;
   padding: 5px 9px;
   font-size: 11px;
@@ -189,7 +189,7 @@ input {
 }
 
 input:focus {
-  border-color: #68e0a1;
+  border-color: #f4c542;
 }
 
 .actions {
@@ -205,7 +205,7 @@ input:focus {
 
 .score {
   font-size: 64px;
-  color: #68e0a1;
+  color: #f4c542;
   font-weight: 800;
   letter-spacing: -0.08em;
 }
@@ -262,6 +262,198 @@ input:focus {
   overflow: hidden;
 }
 
+.card-caption {
+  color: #8793a7;
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+
+.window-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 20px;
+  max-height: 170px;
+  overflow-y: auto;
+}
+
+.window-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  background: #0c111b;
+  border-radius: 8px;
+  padding: 10px;
+  color: #aab5c7;
+  font-size: 12px;
+}
+
+.window-row > strong {
+  color: #e8edf5;
+}
+
+.danger-score {
+  color: #f4c542;
+  font-weight: 800;
+}
+
+.event {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-weight: 700;
+}
+
+.event.anomaly {
+  color: #ff9aa8;
+  background: #42202a;
+}
+
+.event.meta-error {
+  color: #ff9aa8;
+  background: #42202a;
+}
+
+.event.ai-alert {
+  color: #f4c542;
+  background: #403616;
+}
+
+.event.normal {
+  color: #aab5c7;
+  background: #202c3d;
+}
+
+.alert-details {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid #293546;
+  padding-top: 8px;
+  color: #b7c3d5;
+}
+
+.alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.alert-actions button {
+  font-size: 11px;
+  padding: 8px 10px;
+}
+
+.alerts-panel {
+  margin-top: 18px;
+  padding: 22px;
+  background: #121a27;
+  border: 1px solid #202c3d;
+  border-radius: 14px;
+}
+
+.alert-count {
+  min-width: 28px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  color: #ff9aa8;
+  background: #42202a;
+  text-align: center;
+  font-weight: 800;
+}
+
+.alert-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.alert-card {
+  padding: 18px;
+  border: 1px solid #713c4b;
+  border-left: 4px solid #ef6c80;
+  border-radius: 10px;
+  background: #1b1721;
+}
+
+.alert-card.ai-alert {
+  border-color: #806b25;
+  border-left-color: #f4c542;
+  background: #201d14;
+}
+
+.alert-card-header,
+.alert-facts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.alert-label {
+  color: #ff9aa8;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.alert-card.ai-alert .alert-label {
+  color: #f4c542;
+}
+
+.alert-card h3 {
+  margin: 5px 0 0;
+  font-size: 20px;
+}
+
+.alert-score {
+  text-align: right;
+}
+
+.alert-score strong {
+  display: block;
+  color: #ff9aa8;
+  font-size: 28px;
+}
+
+.alert-card.ai-alert .alert-score strong {
+  color: #f4c542;
+}
+
+.alert-score span {
+  color: #8793a7;
+  font-size: 11px;
+}
+
+.alert-facts {
+  justify-content: flex-start;
+  margin: 16px 0;
+  padding: 10px 0;
+  border-top: 1px solid #293546;
+  border-bottom: 1px solid #293546;
+  color: #aab5c7;
+  font-size: 12px;
+}
+
+.alert-content {
+  display: grid;
+  gap: 8px;
+  color: #d3dae5;
+  line-height: 1.4;
+}
+
+.alert-content p {
+  margin: 0;
+}
+
+.alert-content strong {
+  display: block;
+  color: #8793a7;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
 code {
   color: #8793a7;
   overflow: hidden;
@@ -292,5 +484,13 @@ code {
 
   .shell {
     padding: 28px 16px;
+  }
+
+  .window-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .window-row span:not(.event) {
+    grid-column: 2;
   }
 }

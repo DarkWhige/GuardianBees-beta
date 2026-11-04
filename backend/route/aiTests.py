@@ -18,8 +18,8 @@ class AITestRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     question: str = (
-        "Analyse directement cette fenêtre de trafic agrégée, déjà signalée "
-        "comme anomalie. Sois concrète et concise."
+        "Analyze this aggregated traffic window, already flagged as an "
+        "anomaly. Be concrete and concise."
     )
     src_ip: str = "192.168.1.50"
     window_start: str = "2026-11-03T22:00:00Z"

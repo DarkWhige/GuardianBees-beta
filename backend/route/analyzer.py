@@ -28,3 +28,24 @@ def training_status(request: Request):
         "training_records": training_records,
         "model_path": model_path,
     }
+
+
+@router.get("/window")
+def latest_window(request: Request):
+    """Return the latest 30-second traffic window grouped by source IP."""
+    return request.app.state.analyzer.latest_window()
+
+
+@router.get("/alerts")
+def active_alerts(request: Request):
+    """Return all unresolved alerts."""
+    return {"alerts": request.app.state.analyzer.active_alerts()}
+
+
+@router.post("/alerts/{source_ip}/resolve")
+def resolve_active_alert(source_ip: str, request: Request):
+    """Resolve an alert so the source IP may be analyzed again."""
+    resolved = request.app.state.analyzer.resolve_alert(source_ip)
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return {"status": "resolved", "source_ip": source_ip}
